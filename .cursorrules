@@ -1,0 +1,46 @@
+# Snowboard DePIN — Solana / Anchor Development Rules
+
+## Stack
+- Solana programs: Rust + Anchor framework (latest stable 0.30.x)
+- Client SDK: `@coral-xyz/anchor` + `@solana/web3.js`
+- Token standard: SPL Token / Token-2022 for $FUSION rewards
+- Tests: Anchor TypeScript tests in `tests/`
+
+## Anchor Conventions
+- Program ID lives in `declare_id!()` and `Anchor.toml`; keep them in sync
+- Use PDAs with canonical seeds documented in account structs (`#[account(seeds = [...], bump)]`)
+- Prefer `init` / `init_if_needed` over manual account creation in clients
+- All instructions must validate signers, owners, and account constraints in `#[derive(Accounts)]`
+- Use `#[account(mut)]` only where state or lamports actually change
+- Return typed errors via `#[error_code]` enum — never `require!` with raw strings in production paths
+
+## Security (DePIN-specific)
+- Hardware telemetry MUST be verified via Ed25519 precompile (`Ed25519Program`) in the same transaction; introspect with `instructions` sysvar
+- Enforce replay protection: monotonic nonce or slot-bound telemetry records
+- Device registration binds an Ed25519 public key to an on-chain `Device` PDA — never trust unsigned payloads
+- Treasury Vault transfers require PDA signer seeds; cap per-epoch rewards in `GlobalConfig`
+- Validate mint, vault authority, and recipient ATA against `GlobalConfig` on every payout
+
+## Code Style
+- One instruction handler per `pub fn` in `#[program]` module
+- Account structs grouped by instruction; shared types in `state/` module if file grows
+- Constants (seeds, max sizes) at module top: `pub const DEVICE_SEED: &[u8] = b"device";`
+- Keep `lib.rs` focused; extract helpers (e.g. `verify_ed25519_ix`) to `utils/` when > ~400 lines
+
+## Build & Deploy
+```bash
+anchor build          # compile program + generate IDL
+anchor test           # local validator tests
+anchor deploy --provider.cluster devnet
+```
+
+## Client Integration
+- Deserialize accounts with generated IDL types
+- Ed25519 verify ix must precede `submit_telemetry` in the transaction
+- Use `connection.getLatestBlockhash()` and confirm with `confirmed` commitment
+
+## Do NOT
+- Store private keys or mnemonics in repo
+- Skip signer checks on owner/admin paths
+- Transfer rewards without checking treasury balance and rate limits
+- Use unchecked arithmetic for token amounts — use `checked_mul` / `checked_add`

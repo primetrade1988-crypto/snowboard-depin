@@ -28,6 +28,8 @@ pub enum SnowboardDepinError {
     Ed25519PubkeyMismatch,
     #[msg("Ed25519 signed message does not match expected payload")]
     Ed25519MessageMismatch,
+        #[msg("Invalid or malformed zk-SNARK proof")]
+        InvalidZkProof,
     #[msg("Invalid hardware signature")]
     InvalidSignature,
     #[msg("Reward rate must be greater than zero")]

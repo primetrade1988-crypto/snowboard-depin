@@ -14,6 +14,7 @@ use errors::SnowboardDepinError;
 use miii_points_engine::*;
 use motion_staking_pool::*;
 use state::{PayloadFormat, TelemetrySample, MotionProof};
+use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
@@ -120,6 +121,52 @@ pub mod snowboard_depin {
 
     pub fn ingest_protocol_fees(ctx: Context<IngestProtocolFees>, amount: u64) -> Result<()> {
         motion_staking_pool::ingest_protocol_fees(ctx, amount)
+    }
+
+    // Pyth Weather check (placeholder): applies powder multiplier when cold/snow detected.
+    pub fn check_weather_and_apply(ctx: Context<CheckWeather>, _slot: i64) -> Result<()> {
+        // Minimal placeholder: on-chain Pyth verification integration would be here.
+        let weather = &ctx.accounts.weather_feed;
+        msg!("WeatherFeed powder_multiplier_bps={}", weather.powder_multiplier_bps);
+        Ok(())
+    }
+
+    // Token-2022 transfer hook: deducts 1% and sends to treasury
+    pub fn execute_transfer_hook(ctx: Context<ExecuteTransferHook>, amount: u64) -> Result<()> {
+        let fee = amount.checked_div(100).unwrap_or(0);
+        if fee == 0 { return Ok(()); }
+        let cpi_accounts = token::Transfer {
+            from: ctx.accounts.from_token.to_account_info(),
+            to: ctx.accounts.treasury_token.to_account_info(),
+            authority: ctx.accounts.from.to_account_info(),
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        token::transfer(CpiContext::new(cpi_program, cpi_accounts), fee)?;
+        Ok(())
+    }
+
+    // Sponsor escrow: deposit unused funds into yield pool (placeholder)
+    pub fn deposit_escrow_into_yield(ctx: Context<DepositEscrowYield>, amount: u64) -> Result<()> {
+        let escrow = &mut ctx.accounts.sponsor_escrow_v2;
+        escrow.yield_principal = escrow.yield_principal.checked_add(amount).ok_or(error!(SnowboardDepinError::MathOverflow))?;
+        msg!("Deposited {} into yield pool placeholder", amount);
+        Ok(())
+    }
+
+    // ZK SNARK verify placeholder for proving rider in geofence without revealing coords
+    pub fn verify_zk_location(ctx: Context<VerifyZkLocation>, proof: Vec<u8>) -> Result<()> {
+        if proof.is_empty() { return err!(SnowboardDepinError::InvalidZkProof); }
+        // Placeholder: call into real verifier (e.g., Groth16) via CPI or Syscall
+        msg!("Received zk-proof of length {}", proof.len());
+        Ok(())
+    }
+
+    // AI validator multi-sig signing placeholder
+    pub fn ai_sign_trick(ctx: Context<AiSignTrick>, trick_id: u16) -> Result<()> {
+        let ai = &ctx.accounts.ai_validator;
+        require!(ai.is_active, SnowboardDepinError::UnauthorizedDevice);
+        msg!("AI validator {} signed trick {}", ai.key(), trick_id);
+        Ok(())
     }
 }
 
@@ -299,3 +346,74 @@ mod tests {
         let _ = SnowboardDepinError::UnauthorizedDevice;
     }
 }
+
+// --- New on-chain account structures & contexts (placeholders/minimal) ---
+
+#[account]
+pub struct WeatherFeed {
+    pub pyth_price_account: Pubkey,
+    pub powder_multiplier_bps: u16,
+    pub bump: u8,
+}
+
+#[derive(Accounts)]
+pub struct CheckWeather<'info> {
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub weather_feed: Account<'info, WeatherFeed>,
+}
+
+#[account]
+pub struct SponsorEscrowV2 {
+    pub sponsor: Pubkey,
+    pub token_mint: Pubkey,
+    pub escrow_vault: Pubkey,
+    pub yield_pool: Pubkey,
+    pub yield_principal: u64,
+    pub auto_compound: bool,
+    pub bump: u8,
+}
+
+#[derive(Accounts)]
+pub struct DepositEscrowYield<'info> {
+    #[account(mut)]
+    pub sponsor_escrow_v2: Account<'info, SponsorEscrowV2>,
+    #[account(mut)]
+    pub from_token: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct ExecuteTransferHook<'info> {
+    #[account(mut)]
+    pub from: Signer<'info>,
+    #[account(mut)]
+    pub from_token: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub treasury_token: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[account]
+pub struct ZkVerifier {} // placeholder
+
+#[derive(Accounts)]
+pub struct VerifyZkLocation<'info> {
+    pub verifier: Signer<'info>,
+    #[account(mut)]
+    pub zk_verifier: Account<'info, ZkVerifier>,
+}
+
+#[account]
+pub struct AiValidator {
+    pub validator_pubkey: Pubkey,
+    pub is_active: bool,
+    pub bump: u8,
+}
+
+#[derive(Accounts)]
+pub struct AiSignTrick<'info> {
+    pub ai_validator: Account<'info, AiValidator>,
+    pub caller: Signer<'info>,
+}
+

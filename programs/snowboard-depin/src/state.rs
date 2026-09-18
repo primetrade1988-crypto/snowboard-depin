@@ -11,6 +11,7 @@ pub struct GlobalConfig {
     pub fee_vault: Pubkey,
     pub stake_pool: Pubkey,
     pub reward_per_meter: u64,
+    pub reward_per_trick: u64,
     pub reward_per_drop_cm: u64,
     pub reward_per_airtime_ms: u64,
     pub max_payout_per_report: u64,
@@ -63,6 +64,30 @@ pub struct TelemetryRecord {
     pub vertical_drop_cm: u32,
     pub airtime_ms: u32,
     pub reward_amount: u64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct MotionRecord {
+    pub device: Pubkey,
+    pub nonce: u64,
+    pub timestamp: i64,
+    pub trick_id: u16,
+    pub airtime_ms: u32,
+    pub rotation_deg: u16,
+    pub reward_amount: u64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Badge {
+    pub owner: Pubkey,
+    pub device: Pubkey,
+    pub badge_id: u16,
+    pub count: u64,
+    pub last_awarded_at: i64,
     pub bump: u8,
 }
 
@@ -137,6 +162,16 @@ pub struct TelemetrySample {
     pub distance_cm: u32,
     pub vertical_drop_cm: u32,
     pub airtime_ms: u32,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct MotionProof {
+    pub nonce: u64,
+    pub timestamp: i64,
+    pub trick_id: u16,
+    pub airtime_ms: u32,
+    pub rotation_deg: u16,
+    pub confidence: u8,
 }
 
 impl StakeTier {

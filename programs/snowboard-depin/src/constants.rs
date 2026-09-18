@@ -14,6 +14,7 @@ pub const MAX_PAYLOAD_LEN: usize = 256;
 pub const DEFAULT_REWARD_PER_METER: u64 = 1_000;
 pub const DEFAULT_REWARD_PER_DROP_CM: u64 = 2;
 pub const DEFAULT_REWARD_PER_AIRTIME_MS: u64 = 5;
+pub const DEFAULT_REWARD_PER_TRICK: u64 = 10_000;
 pub const DEFAULT_MAX_PAYOUT: u64 = 50_000_000;
 pub const DEFAULT_MAX_EPOCH_EMISSION: u64 = 500_000_000;
 pub const DEFAULT_EPOCH_SLOTS: u64 = 216_000;
@@ -24,6 +25,12 @@ pub const MAX_ACCEL_MILLI_G: u32 = 8_000;
 pub const MAX_IMU_DELTA: u32 = 12_000;
 pub const MAX_SAMPLE_DT_SECS: i64 = 120;
 pub const DIMINISH_K: u64 = 50_000;
+
+pub const BADGE_SEED: &[u8] = b"badge";
+pub const MOTION_SEED: &[u8] = b"motion";
+pub const MAX_TRICK_AIRTIME_MS: u32 = 10_000;
+pub const MAX_TRICK_ROTATION_DEG: u16 = 3600;
+pub const TRICK_COOLDOWN_SECS: i64 = 10;
 
 pub const DEFAULT_EMISSION_PER_SLOT: u64 = 100;
 pub const DEFAULT_HALVING_INTERVAL: u64 = 15_768_000;

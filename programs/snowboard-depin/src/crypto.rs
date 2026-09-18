@@ -6,6 +6,7 @@ use crate::errors::SnowboardDepinError;
 use crate::state::TelemetrySample;
 
 pub const TELEM_PREFIX: &[u8] = b"SNOWBOARD_DEPIN_TELEM";
+pub const MOTION_PREFIX: &[u8] = b"SNOWBOARD_DEPIN_MOTION";
 
 pub fn build_telemetry_message(device: &[u8], sample: &TelemetrySample) -> Vec<u8> {
     let mut msg = TELEM_PREFIX.to_vec();
@@ -21,6 +22,18 @@ pub fn build_telemetry_message(device: &[u8], sample: &TelemetrySample) -> Vec<u
     msg.extend_from_slice(&sample.distance_cm.to_le_bytes());
     msg.extend_from_slice(&sample.vertical_drop_cm.to_le_bytes());
     msg.extend_from_slice(&sample.airtime_ms.to_le_bytes());
+    msg
+}
+
+pub fn build_motion_message(device: &[u8], proof: &crate::state::MotionProof) -> Vec<u8> {
+    let mut msg = MOTION_PREFIX.to_vec();
+    msg.extend_from_slice(device);
+    msg.extend_from_slice(&proof.nonce.to_le_bytes());
+    msg.extend_from_slice(&proof.timestamp.to_le_bytes());
+    msg.extend_from_slice(&proof.trick_id.to_le_bytes());
+    msg.extend_from_slice(&proof.airtime_ms.to_le_bytes());
+    msg.extend_from_slice(&proof.rotation_deg.to_le_bytes());
+    msg.push(proof.confidence);
     msg
 }
 

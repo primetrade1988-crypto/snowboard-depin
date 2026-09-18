@@ -60,6 +60,12 @@ pub enum SnowboardDepinError {
     DecodeFailed,
     #[msg("Re-entrancy guard is locked")]
     Reentrancy,
+    #[msg("Motion proof signature invalid or malformed")]
+    InvalidMotionProof,
+    #[msg("Trick proof rejected — failed motion validation")]
+    ProofOfMotionFailed,
+    #[msg("Badge already exists or cannot be awarded")]
+    BadgeAwardFailed,
     #[msg("Halving interval has not elapsed")]
     HalvingNotDue,
     #[msg("Protocol fee amount is zero")]

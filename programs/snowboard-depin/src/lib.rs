@@ -13,7 +13,7 @@ use adapters::*;
 use errors::SnowboardDepinError;
 use miii_points_engine::*;
 use motion_staking_pool::*;
-use state::{PayloadFormat, TelemetrySample};
+use state::{PayloadFormat, TelemetrySample, MotionProof};
 
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
@@ -48,6 +48,14 @@ pub mod snowboard_depin {
         ed25519_ix_index: u8,
     ) -> Result<()> {
         miii_points_engine::submit_decoded_telemetry(ctx, nonce, payload, ed25519_ix_index)
+    }
+
+    pub fn submit_motion_proof(
+        ctx: Context<SubmitMotionProof>,
+        proof: MotionProof,
+        ed25519_ix_index: u8,
+    ) -> Result<()> {
+        miii_points_engine::submit_motion_proof(ctx, proof, ed25519_ix_index)
     }
 
     pub fn register_adapter(
@@ -107,6 +115,7 @@ pub mod snowboard_depin {
 mod tests {
     use super::*;
     use crypto::build_telemetry_message;
+    use crypto::build_motion_message;
     use miii_points_engine::compute_reward;
     use state::{Device, GlobalConfig};
 
@@ -133,6 +142,76 @@ mod tests {
     }
 
     #[test]
+    fn motion_message_is_deterministic() {
+        let device = [3u8; 32];
+        let proof = state::MotionProof {
+            nonce: 2,
+            timestamp: 1_700_000_001,
+            trick_id: 7,
+            airtime_ms: 1200,
+            rotation_deg: 720,
+            confidence: 80,
+        };
+        let a = build_motion_message(&device, &proof);
+        let b = build_motion_message(&device, &proof);
+        assert_eq!(a, b);
+        assert!(a.starts_with(b"SNOWBOARD_DEPIN_MOTION"));
+    }
+
+    #[test]
+    fn trick_reward_scales_with_confidence() {
+        let base: u64 = 10_000;
+        let c50 = base.checked_mul(50).and_then(|v| v.checked_div(100)).unwrap();
+        let c100 = base.checked_mul(100).and_then(|v| v.checked_div(100)).unwrap();
+        assert!(c100 >= c50);
+    }
+
+    #[test]
+    fn validate_motion_against_telemetry_unit() {
+        use state::{MotionProof, TelemetryRecord, Device};
+        use miii_points_engine::validate_motion_against_telemetry;
+        let proof = MotionProof {
+            nonce: 10,
+            timestamp: 1_700_000_100,
+            trick_id: 3,
+            airtime_ms: 1200,
+            rotation_deg: 540,
+            confidence: 70,
+        };
+        let device = Device {
+            owner: Pubkey::default(),
+            device_pubkey: [0u8;32],
+            device_id: String::new(),
+            status: state::DeviceStatus::Active,
+            last_nonce: 5,
+            last_timestamp: 1_700_000_000,
+            last_lat_e7: 0,
+            last_lon_e7: 0,
+            last_speed_cm_s: 300,
+            last_accel_milli_g: 0,
+            epoch_id: 0,
+            epoch_emitted: 0,
+            epoch_distance_m: 0,
+            total_distance_m: 0,
+            total_rewards: 0,
+            processing_lock: 0,
+            bump: 0,
+        };
+        let telem = TelemetryRecord {
+            device: Pubkey::default(),
+            nonce: 9,
+            timestamp: 1_700_000_099,
+            distance_meters: 10,
+            vertical_drop_cm: 100,
+            airtime_ms: 1200,
+            reward_amount: 0,
+            bump: 0,
+        };
+        let res = validate_motion_against_telemetry(&proof, &device, Some(&telem));
+        assert!(res.is_ok());
+    }
+
+    #[test]
     fn diminishing_returns_reduce_after_volume() {
         let config = GlobalConfig {
             admin: Pubkey::default(),
@@ -141,6 +220,7 @@ mod tests {
             fee_vault: Pubkey::default(),
             stake_pool: Pubkey::default(),
             reward_per_meter: 1_000,
+            reward_per_trick: 10_000,
             reward_per_drop_cm: 0,
             reward_per_airtime_ms: 0,
             max_payout_per_report: 50_000_000,

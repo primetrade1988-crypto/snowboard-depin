@@ -1,7 +1,8 @@
 use crate::constants::*;
 use crate::crypto::{build_telemetry_message, verify_ed25519_signature};
 use crate::errors::SnowboardDepinError;
-use crate::state::{Device, DeviceStatus, GlobalConfig, TelemetryRecord, TelemetrySample};
+use crate::state::{Device, DeviceStatus, GlobalConfig, TelemetryRecord, TelemetrySample, MotionProof, MotionRecord, Badge};
+use crate::constants::{BADGE_SEED, MOTION_SEED, DEFAULT_REWARD_PER_TRICK};
 use crate::universal_decoder;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::sysvar::instructions::ID as IX_SYSVAR_ID;
@@ -20,6 +21,7 @@ pub fn initialize(ctx: Context<Initialize>, reward_per_meter: u64) -> Result<()>
     } else {
         reward_per_meter
     };
+    config.reward_per_trick = DEFAULT_REWARD_PER_TRICK;
     config.reward_per_drop_cm = DEFAULT_REWARD_PER_DROP_CM;
     config.reward_per_airtime_ms = DEFAULT_REWARD_PER_AIRTIME_MS;
     config.max_payout_per_report = DEFAULT_MAX_PAYOUT;
@@ -278,6 +280,128 @@ fn inner_settle(ctx: Context<SubmitDecodedTelemetry>, sample: TelemetrySample) -
     Ok(())
 }
 
+pub fn validate_motion_against_telemetry(
+    proof: &MotionProof,
+    device: &Device,
+    telemetry: Option<&TelemetryRecord>,
+) -> Result<()> {
+    require!(proof.airtime_ms <= MAX_TRICK_AIRTIME_MS, SnowboardDepinError::ProofOfMotionFailed);
+    require!(proof.rotation_deg <= MAX_TRICK_ROTATION_DEG, SnowboardDepinError::ProofOfMotionFailed);
+
+    if device.last_timestamp > 0 {
+        require!(proof.timestamp > device.last_timestamp, SnowboardDepinError::ReplayDetected);
+        let dt = proof
+            .timestamp
+            .checked_sub(device.last_timestamp)
+            .ok_or(SnowboardDepinError::InvalidTimestamp)?;
+        require!(dt <= MAX_SAMPLE_DT_SECS, SnowboardDepinError::InvalidTimestamp);
+        require!(dt >= TRICK_COOLDOWN_SECS, SnowboardDepinError::CooldownActive);
+    }
+
+    require!(device.last_speed_cm_s <= MAX_SPEED_CM_S, SnowboardDepinError::SpeedThresholdExceeded);
+
+    if let Some(t) = telemetry {
+        let diff = if proof.timestamp > t.timestamp {
+            proof.timestamp - t.timestamp
+        } else {
+            t.timestamp - proof.timestamp
+        };
+        require!(diff <= MAX_SAMPLE_DT_SECS, SnowboardDepinError::InvalidTimestamp);
+        require!(proof.airtime_ms <= t.airtime_ms.saturating_add(500), SnowboardDepinError::ProofOfMotionFailed);
+        require!(t.distance_meters > 0 || t.airtime_ms > 0, SnowboardDepinError::ProofOfMotionFailed);
+    }
+
+    Ok(())
+}
+
+pub fn submit_motion_proof(
+    ctx: Context<SubmitMotionProof>,
+    proof: MotionProof,
+    ed25519_ix_index: u8,
+) -> Result<()> {
+    require!(ctx.accounts.device.status == DeviceStatus::Active, SnowboardDepinError::DeviceInactive);
+
+    // Basic anti-fraud on timing / nonce
+    require!(proof.nonce > ctx.accounts.device.last_nonce, SnowboardDepinError::ReplayDetected);
+    let clock = Clock::get()?;
+    require!(proof.timestamp <= clock.unix_timestamp + 30, SnowboardDepinError::InvalidTimestamp);
+
+    // Verify signed proof
+    let message = crate::crypto::build_motion_message(ctx.accounts.device.key().as_ref(), &proof);
+    crate::crypto::verify_ed25519_signature(
+        &ctx.accounts.instructions_sysvar,
+        ed25519_ix_index,
+        &ctx.accounts.device.device_pubkey,
+        &message,
+    )?;
+
+    // Simple confidence gate
+    require!(proof.confidence >= 30, SnowboardDepinError::ProofOfMotionFailed);
+
+    // Stricter checks against device and optional telemetry
+    validate_motion_against_telemetry(&proof, &ctx.accounts.device, ctx.accounts.last_telemetry.as_ref().map(|a| &**a))?;
+
+    // Compute reward for trick
+    let mut reward = ctx.accounts.global_config.reward_per_trick;
+    // Small scaling by confidence (percent)
+    reward = reward
+        .checked_mul(proof.confidence as u64)
+        .and_then(|v| v.checked_div(100))
+        .ok_or(SnowboardDepinError::MathOverflow)?;
+
+    // Effects and bookkeeping
+    let device = &mut ctx.accounts.device;
+    device.last_nonce = proof.nonce;
+    device.last_timestamp = proof.timestamp;
+    device.total_rewards = device.total_rewards.checked_add(reward).ok_or(SnowboardDepinError::MathOverflow)?;
+
+    let rec = &mut ctx.accounts.motion_record;
+    rec.device = device.key();
+    rec.nonce = proof.nonce;
+    rec.timestamp = proof.timestamp;
+    rec.trick_id = proof.trick_id;
+    rec.airtime_ms = proof.airtime_ms;
+    rec.rotation_deg = proof.rotation_deg;
+    rec.reward_amount = reward;
+    rec.bump = ctx.bumps.motion_record;
+
+    // Update badge (init_if_needed semantics assumed)
+    let badge = &mut ctx.accounts.badge;
+    badge.owner = device.owner;
+    badge.device = device.key();
+    badge.badge_id = proof.trick_id;
+    badge.count = badge.count.checked_add(1).unwrap_or(1);
+    badge.last_awarded_at = clock.unix_timestamp;
+    badge.bump = ctx.bumps.badge;
+
+    ctx.accounts.global_config.total_rewards_distributed = ctx
+        .accounts
+        .global_config
+        .total_rewards_distributed
+        .checked_add(reward)
+        .ok_or(SnowboardDepinError::MathOverflow)?;
+
+    // Transfer reward from treasury
+    if reward > 0 {
+        let bump = ctx.accounts.global_config.bump;
+        let seeds: &[&[u8]] = &[CONFIG_SEED, &[bump]];
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.treasury_vault.to_account_info(),
+                    to: ctx.accounts.recipient_fusion.to_account_info(),
+                    authority: ctx.accounts.global_config.to_account_info(),
+                },
+                &[seeds],
+            ),
+            reward,
+        )?;
+    }
+
+    Ok(())
+}
+
 pub fn update_reward_rate(ctx: Context<UpdateConfig>, reward_per_meter: u64) -> Result<()> {
     require!(reward_per_meter > 0, SnowboardDepinError::InvalidRewardRate);
     ctx.accounts.global_config.reward_per_meter = reward_per_meter;
@@ -523,6 +647,63 @@ pub struct SubmitDecodedTelemetry<'info> {
         bump,
     )]
     pub telemetry_record: Account<'info, TelemetryRecord>,
+    #[account(
+        mut,
+        constraint = recipient_fusion.owner == device.owner @ SnowboardDepinError::InvalidRecipient,
+        constraint = recipient_fusion.mint == fusion_mint.key() @ SnowboardDepinError::InvalidMint,
+    )]
+    pub recipient_fusion: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: Ed25519 introspection sysvar.
+    #[account(address = IX_SYSVAR_ID)]
+    pub instructions_sysvar: AccountInfo<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(proof: MotionProof)]
+pub struct SubmitMotionProof<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump = global_config.bump,
+        has_one = fusion_mint,
+        has_one = treasury_vault,
+    )]
+    pub global_config: Account<'info, GlobalConfig>,
+    pub fusion_mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        seeds = [TREASURY_SEED, global_config.key().as_ref()],
+        bump = global_config.treasury_bump,
+    )]
+    pub treasury_vault: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        seeds = [DEVICE_SEED, device.owner.as_ref(), device.device_id.as_bytes()],
+        bump = device.bump,
+        constraint = device.status == DeviceStatus::Active @ SnowboardDepinError::UnauthorizedDevice,
+    )]
+    pub device: Account<'info, Device>,
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + MotionRecord::INIT_SPACE,
+        seeds = [MOTION_SEED, device.key().as_ref(), &proof.nonce.to_le_bytes()],
+        bump,
+    )]
+    pub motion_record: Account<'info, MotionRecord>,
+    pub last_telemetry: Option<Account<'info, TelemetryRecord>>,
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + Badge::INIT_SPACE,
+        seeds = [BADGE_SEED, device.key().as_ref(), &proof.trick_id.to_le_bytes()],
+        bump,
+    )]
+    pub badge: Account<'info, Badge>,
     #[account(
         mut,
         constraint = recipient_fusion.owner == device.owner @ SnowboardDepinError::InvalidRecipient,

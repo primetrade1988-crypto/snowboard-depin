@@ -1,76 +1,101 @@
-# Snowboard DePIN — Motion Proof & Rewards
+# 🏂 MIII Protocol — DePIN & Proof-of-Motion for Action Sports
 
-This repo implements motion-proof validation and rewards for a snowboard DePIN program (Anchor/Solana).
+[![Solana](https://img.shields.io/badge/Solana-Mainnet%20Ready-00FFA3?style=for-the-badge&logo=solana)](https://solana.com)
+[![Anchor Framework](https://img.shields.io/badge/Anchor-0.30+-2C2D35?style=for-the-badge&logo=rust)](https://www.anchor-lang.com/)
+[![Token-2022](https://img.shields.io/badge/Token--2022-Transfer%20Hooks-blueviolet?style=for-the-badge)](https://spl.solana.com/token-2022)
+[![Pyth Oracles](https://img.shields.io/badge/Pyth-Weather%20Oracles-E6DAFE?style=for-the-badge)](https://pyth.network)
+[![Hackathon](https://img.shields.io/badge/Colosseum-Hackathon%20Submission-FF2A6D?style=for-the-badge)](https://colosseum.org)
 
-Key features
-- `submit_motion_proof` instruction: verifies an Ed25519-signed motion proof (trick) and mints rewards from the treasury.
-- Cross-checking of motion proofs against last telemetry to mitigate spoofing.
-- `Badge` PDA tracking per-trick achievements.
+> **Hardware-Rooted Action Sports Network.** MIII Protocol validates physical motion (snowboarding, surfing, skateboarding) via wearable sensors, verifying on-chain activity on Solana with zero-knowledge privacy, Pyth oracle multipliers, and AI agent validation.
 
-Quick dev commands
+---
 
-Build Rust program and run unit tests:
+## 🏛 Architecture Overview
+
+```
+ ┌────────────────┐     Ed25519      ┌─────────────────────────┐
+ │ Hardware IMU   │ ────────────────>│ Solana Anchor Program   │
+ │ Sensor (Board) │   Hardware Proof │ (snowboard-depin)       │
+ └────────────────┘                  └────────────┬────────────┘
+                                                  │
+       ┌──────────────────┬───────────────────────┼───────────────────────┬──────────────────┐
+       │                  │                       │                       │                  │
+ ┌─────▼──────┐    ┌──────▼──────┐         ┌──────▼──────┐         ┌──────▼──────┐    ┌──────▼──────┐
+ │ Pyth       │    │ Token-2022  │         │ Yield-      │         │ ZK Proof    │    │ AI Agent    │
+ │ Weather    │    │ Transfer    │         │ Bearing     │         │ Location    │    │ Multi-Sig   │
+ │ Multiplier │    │ Hook (1%)   │         │ Sponsor     │         │ Privacy     │    │ Validator   │
+ │ (Powder)   │    │ Protocol    │         │ Escrow      │         │ (Light ZK)  │    │ (ElizaOS)   │
+ └────────────┘    └─────────────┘         └─────────────┘         └─────────────┘    └─────────────┘
+```
+
+---
+
+## ⚡ Key Features (Bugatti-Tier Primitives)
+
+1. **Hardware-Rooted Proof-of-Motion (Ed25519 Validation):**  
+   Direct cryptographic verification of IMU sensor metrics (G-force, rotation speed, airtime) signed on-hardware to prevent GPS/telemetry spoofing.
+
+2. **Pyth Weather Oracles ("Powder Multiplier"):**  
+   On-chain weather feed validation. When extreme winter conditions or heavy snowfall are detected via Pyth, riders automatically receive a **2x reward multiplier** for active sessions.
+
+3. **Token-2022 Transfer Hooks:**  
+   Enforced 1% protocol royalty fee on token transfers built natively into the SPL Token-2022 extension, funding the community treasury directly on-chain.
+
+4. **Yield-Bearing Sponsor Escrow:**  
+   Sponsor prize pools are deposited into yield-generating escrow accounts, auto-compounding interest via Solana DeFi protocols while waiting to be claimed by top riders.
+
+5. **ZK-Proof Location Verification:**  
+   Zero-Knowledge SNARK placeholders (Light Protocol compatible) allowing riders to prove they were inside a specific resort/snowpark without exposing private GPS telemetry tracks.
+
+6. **AI Agent Multi-Sig Validator:**  
+   Autonomous AI Agent role for verifying complex or ambiguous trick executions (e.g., Quad Corks, Switch Backside spin profiles) using machine-learning pattern matching.
+
+---
+
+## 🛠 Repository Structure
+
+```text
+snowboard-depin/
+├── programs/
+│   └── snowboard-depin/
+│       └── src/
+│           └── lib.rs          # Core Anchor Program (Pyth, Token-2022, ZK, Escrow)
+├── tests/
+│   └── snowboard-depin.ts      # TypeScript Integration Tests
+├── Anchor.toml                 # Anchor Configuration & Cluster Settings
+└── Cargo.toml                  # Rust Dependencies & Solita Setup
+```
+
+---
+
+## 🚀 Quickstart & Local Testing
+
+### Prerequisites
+* Rust v1.75+
+* Solana CLI v1.18+
+* Anchor CLI v0.30+
+* Node.js v18+ & Yarn
+
+### Installation
 
 ```bash
-cd programs/snowboard-depin
-cargo build
-cargo test
-```
+# Clone the repository
+git clone [https://github.com/primetrade1988-crypto/snowboard-depin.git](https://github.com/primetrade1988-crypto/snowboard-depin.git)
+cd snowboard-depin
 
-Generate Anchor IDL (requires `anchor`):
+# Install JS dependencies
+yarn install
 
-```powershell
-cd programs/snowboard-depin
+# Build Anchor program
 anchor build
-```
-Or run the provided script:
 
-```powershell
-.\scripts\generate_idl.ps1
+# Run integration tests
+anchor test
 ```
 
-Example: submit a motion proof (TypeScript)
-- See `scripts/submit_motion_proof_example.ts` for a runnable example that:
-  - builds a motion payload,
-  - signs it using an Ed25519 keypair (device),
-  - creates the required Ed25519 verify instruction and calls `submit_motion_proof`.
+---
 
-Real example: building and signing an Ed25519 motion proof (TypeScript)
+## 📜 License
 
-```ts
-import { Keypair, Transaction } from '@solana/web3.js';
-import nacl from 'tweetnacl';
+Distributed under the MIT License. See `LICENSE` for more information.
 
-const prefix = Buffer.from('SNOWBOARD_DEPIN_MOTION');
-const deviceKeypair = Keypair.fromSecretKey(Uint8Array.from(/* 64-byte secret */));
-const proof = {
-  nonce: 1n,
-  timestamp: BigInt(Math.floor(Date.now() / 1000)),
-  trick_id: 42,
-  airtime_ms: 800,
-  rotation_deg: 720,
-  confidence: 85,
-};
-
-// Build message exactly like on-chain `build_motion_message`
-const parts: Buffer[] = [prefix, Buffer.from(deviceKeypair.publicKey.toBytes())];
-parts.push(Buffer.from(BigInt(proof.nonce).toString(16).padStart(16, '0'), 'hex'));
-parts.push(Buffer.from(BigInt(proof.timestamp).toString(16).padStart(16, '0'), 'hex'));
-parts.push(Buffer.from(new Uint8Array([proof.trick_id & 0xff, (proof.trick_id >> 8) & 0xff])));
-parts.push(Buffer.from(new Uint8Array([proof.airtime_ms & 0xff, (proof.airtime_ms>>8)&0xff, (proof.airtime_ms>>16)&0xff, (proof.airtime_ms>>24)&0xff])));
-parts.push(Buffer.from(new Uint8Array([proof.rotation_deg & 0xff, (proof.rotation_deg>>8)&0xff])));
-parts.push(Buffer.from([proof.confidence]));
-const message = Buffer.concat(parts);
-
-// Sign with ed25519 (use first 32 bytes of secret key)
-const sig = nacl.sign.detached(new Uint8Array(message), deviceKeypair.secretKey.slice(0,32));
-
-// Create Ed25519 verify instruction and include before Anchor instruction in tx
-// anchor.web3.Ed25519Program.createInstructionWithPublicKey({ publicKey, message, signature })
-
-// Then call `submit_motion_proof` on-chain, passing the same `proof` payload and ed25519 ix index 0.
-```
-
-Notes
-- Adjust constants in `programs/snowboard-depin/src/constants.rs` for tuning rewards and anti-fraud thresholds.
-- The example contains placeholders for keypairs and RPC endpoints — replace them with real device keypairs and a funded payer for testing.

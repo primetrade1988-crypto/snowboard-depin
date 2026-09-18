@@ -28,6 +28,7 @@ pub const DIMINISH_K: u64 = 50_000;
 
 pub const BADGE_SEED: &[u8] = b"badge";
 pub const MOTION_SEED: &[u8] = b"motion";
+pub const SPONSOR_SEED: &[u8] = b"sponsor";
 pub const MAX_TRICK_AIRTIME_MS: u32 = 10_000;
 pub const MAX_TRICK_ROTATION_DEG: u16 = 3600;
 pub const TRICK_COOLDOWN_SECS: i64 = 10;
@@ -44,3 +45,4 @@ pub const DEFAULT_BURN_BPS: u16 = 3_000;
 pub const DEFAULT_STAKER_SHARE_BPS: u16 = 7_000;
 pub const BPS_DENOM: u64 = 10_000;
 pub const INDEX_SCALE: u128 = 1_000_000_000_000;
+pub const DEFAULT_BATCH_MAX: usize = 32;

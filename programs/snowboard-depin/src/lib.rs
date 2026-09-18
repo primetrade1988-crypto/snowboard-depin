@@ -86,6 +86,18 @@ pub mod snowboard_depin {
         miii_points_engine::deactivate_device(ctx)
     }
 
+    pub fn slash_sensor(ctx: Context<SlashSensor>, reason: String) -> Result<()> {
+        miii_points_engine::slash_sensor(ctx, reason)
+    }
+
+    pub fn claim_sponsor_reward(ctx: Context<ClaimSponsorReward>, sample: TelemetrySample, ed25519_ix_index: u8) -> Result<()> {
+        miii_points_engine::claim_sponsor_reward(ctx, sample, ed25519_ix_index)
+    }
+
+    pub fn batch_submit_telemetry(ctx: Context<BatchSubmitTelemetry>, samples: Vec<TelemetrySample>) -> Result<()> {
+        miii_points_engine::batch_submit_telemetry(ctx, samples)
+    }
+
     pub fn initialize_staking(ctx: Context<InitializeStaking>) -> Result<()> {
         motion_staking_pool::initialize_staking(ctx)
     }
@@ -196,6 +208,11 @@ mod tests {
             total_rewards: 0,
             processing_lock: 0,
             bump: 0,
+            is_blacklisted: false,
+            anomaly_count: 0,
+            uptime_streak: 0,
+            last_active_day: 0,
+            stake_amount: 0,
         };
         let telem = TelemetryRecord {
             device: Pubkey::default(),
@@ -260,6 +277,11 @@ mod tests {
             total_rewards: 0,
             processing_lock: 0,
             bump: 0,
+            is_blacklisted: false,
+            anomaly_count: 0,
+            uptime_streak: 0,
+            last_active_day: 0,
+            stake_amount: 0,
         };
         let fresh = compute_reward(&config, &device, &sample).unwrap();
         device.epoch_distance_m = 200_000;

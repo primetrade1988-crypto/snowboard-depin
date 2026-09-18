@@ -55,6 +55,11 @@ pub struct Device {
     pub total_rewards: u64,
     pub processing_lock: u8,
     pub bump: u8,
+    pub is_blacklisted: bool,
+    pub anomaly_count: u32,
+    pub uptime_streak: u32,
+    pub last_active_day: i64,
+    pub stake_amount: u64,
 }
 
 #[account]
@@ -91,6 +96,21 @@ pub struct Badge {
     pub badge_id: u16,
     pub count: u64,
     pub last_awarded_at: i64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct SponsorEscrow {
+    pub sponsor: Pubkey,
+    pub token_mint: Pubkey,
+    pub escrow_vault: Pubkey,
+    pub lat_e7_center: i32,
+    pub lon_e7_center: i32,
+    pub radius_m: u32,
+    pub trick_id: u16,
+    pub reward_amount: u64,
+    pub claimed_count: u64,
     pub bump: u8,
 }
 

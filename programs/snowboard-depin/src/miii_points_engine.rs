@@ -7,6 +7,7 @@ use crate::universal_decoder;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::sysvar::instructions::ID as IX_SYSVAR_ID;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use crate::constants::{SPONSOR_SEED, DEFAULT_BATCH_MAX};
 
 pub fn initialize(ctx: Context<Initialize>, reward_per_meter: u64) -> Result<()> {
     let clock = Clock::get()?;
@@ -445,6 +446,107 @@ pub fn submit_motion_proof(
     Ok(())
 }
 
+pub fn compute_dynamic_multiplier(config: &GlobalConfig, device: &Device, _proof: &MotionProof) -> Result<u64> {
+    // Base multiplier from airtime & rotation already handled by caller; add uptime streak bonus
+    let uptime_bonus_bps = (device.uptime_streak as u64).saturating_mul(50); // 0.5% per day streak
+    let mut total_bps = uptime_bonus_bps;
+    // Cap bonus to a sensible limit
+    let cap = config.max_trick_multiplier_bps.saturating_sub(BPS_DENOM);
+    if total_bps > cap {
+        total_bps = cap;
+    }
+    Ok(BPS_DENOM.checked_add(total_bps).ok_or(SnowboardDepinError::MathOverflow)?)
+}
+
+pub fn slash_sensor(ctx: Context<SlashSensor>, reason: String) -> Result<()> {
+    require!(ctx.accounts.admin.key() == ctx.accounts.global_config.admin, SnowboardDepinError::UnauthorizedDevice);
+    let device = &mut ctx.accounts.device;
+    device.is_blacklisted = true;
+    device.status = DeviceStatus::Inactive;
+    device.anomaly_count = device.anomaly_count.saturating_add(1);
+    emit!(SensorSlashedEvent { device: device.key(), reason });
+    Ok(())
+}
+
+#[event]
+pub struct SensorSlashedEvent {
+    pub device: Pubkey,
+    pub reason: String,
+}
+
+pub fn claim_sponsor_reward(ctx: Context<ClaimSponsorReward>, sample: TelemetrySample, ed25519_ix_index: u8) -> Result<()> {
+    // Verify signature from device
+    let message = build_telemetry_message(ctx.accounts.device.key().as_ref(), &sample);
+    verify_ed25519_signature(&ctx.accounts.instructions_sysvar, ed25519_ix_index, &ctx.accounts.device.device_pubkey, &message)?;
+
+    // Geofence check (approx)
+    let dlat = (sample.lat_e7 as i64 - ctx.accounts.escrow.lat_e7_center as i64).unsigned_abs() as u64;
+    let dlon = (sample.lon_e7 as i64 - ctx.accounts.escrow.lon_e7_center as i64).unsigned_abs() as u64;
+    let approx_cm = dlat.saturating_add(dlon).saturating_mul(111) / 100;
+    let approx_m = approx_cm / 100;
+    require!(approx_m <= ctx.accounts.escrow.radius_m as u64, SnowboardDepinError::SponsorClaimFailed);
+
+    // Trick match if set
+    if ctx.accounts.escrow.trick_id != 0 {
+        require!(ctx.accounts.escrow.trick_id == sample.imu_delta as u16 || ctx.accounts.escrow.trick_id == sample.airtime_ms as u16, SnowboardDepinError::SponsorClaimFailed);
+    }
+
+    // Transfer reward from escrow vault to recipient
+    require!(ctx.accounts.escrow.reward_amount > 0, SnowboardDepinError::SponsorClaimFailed);
+    require!(ctx.accounts.escrow.escrow_vault == ctx.accounts.escrow_vault.key(), SnowboardDepinError::SponsorClaimFailed);
+    require!(ctx.accounts.escrow.sponsor == ctx.accounts.sponsor.key(), SnowboardDepinError::UnauthorizedDevice);
+
+    let bump = ctx.accounts.escrow.bump;
+    let seeds: &[&[u8]] = &[SPONSOR_SEED, ctx.accounts.sponsor.key.as_ref(), &[bump]];
+    token::transfer(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer { from: ctx.accounts.escrow_vault.to_account_info(), to: ctx.accounts.recipient_fusion.to_account_info(), authority: ctx.accounts.escrow.to_account_info() },
+            &[seeds],
+        ),
+        ctx.accounts.escrow.reward_amount,
+    )?;
+
+    let escrow = &mut ctx.accounts.escrow;
+    escrow.claimed_count = escrow.claimed_count.saturating_add(1);
+    Ok(())
+}
+
+pub fn batch_submit_telemetry(ctx: Context<BatchSubmitTelemetry>, samples: Vec<TelemetrySample>) -> Result<()> {
+    require!(samples.len() <= DEFAULT_BATCH_MAX, SnowboardDepinError::BatchTooLarge);
+    require!(ctx.accounts.payer.key() == ctx.accounts.device.owner, SnowboardDepinError::UnauthorizedDevice);
+
+    let mut total_reward: u64 = 0;
+    for sample in samples.iter() {
+        apply_anti_fraud(&ctx.accounts.device, sample)?; // best-effort
+        let r = compute_reward(&ctx.accounts.global_config, &ctx.accounts.device, sample)?;
+        total_reward = total_reward.checked_add(r).ok_or(SnowboardDepinError::MathOverflow)?;
+    }
+
+    require!(ctx.accounts.treasury_vault.amount >= total_reward, SnowboardDepinError::InsufficientTreasury);
+
+    // update device summary
+    let device = &mut ctx.accounts.device;
+    device.epoch_emitted = device.epoch_emitted.checked_add(total_reward).ok_or(SnowboardDepinError::MathOverflow)?;
+    device.total_rewards = device.total_rewards.checked_add(total_reward).ok_or(SnowboardDepinError::MathOverflow)?;
+
+    // single transfer for gas efficiency
+    if total_reward > 0 {
+        let bump = ctx.accounts.global_config.bump;
+        let seeds: &[&[u8]] = &[CONFIG_SEED, &[bump]];
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer { from: ctx.accounts.treasury_vault.to_account_info(), to: ctx.accounts.recipient_fusion.to_account_info(), authority: ctx.accounts.global_config.to_account_info() },
+                &[seeds],
+            ),
+            total_reward,
+        )?;
+    }
+
+    Ok(())
+}
+
 pub fn update_reward_rate(ctx: Context<UpdateConfig>, reward_per_meter: u64) -> Result<()> {
     require!(reward_per_meter > 0, SnowboardDepinError::InvalidRewardRate);
     ctx.accounts.global_config.reward_per_meter = reward_per_meter;
@@ -784,4 +886,51 @@ pub struct DeactivateDevice<'info> {
         has_one = owner,
     )]
     pub device: Account<'info, Device>,
+}
+
+#[derive(Accounts)]
+pub struct SlashSensor<'info> {
+    #[account(mut, signer)]
+    pub admin: Signer<'info>,
+    #[account(mut, seeds = [CONFIG_SEED], bump = global_config.bump)]
+    pub global_config: Account<'info, GlobalConfig>,
+    #[account(mut, seeds = [DEVICE_SEED, device.owner.as_ref(), device.device_id.as_bytes()], bump = device.bump)]
+    pub device: Account<'info, Device>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimSponsorReward<'info> {
+    #[account(mut, seeds = [CONFIG_SEED], bump = global_config.bump)]
+    pub global_config: Account<'info, GlobalConfig>,
+    #[account(mut, signer)]
+    pub sponsor: Signer<'info>,
+    #[account(mut, seeds = [SPONSOR_SEED, sponsor.key().as_ref()], bump = escrow.bump)]
+    pub escrow: Account<'info, crate::state::SponsorEscrow>,
+    #[account(mut)]
+    pub escrow_vault: Account<'info, TokenAccount>,
+    #[account(mut, seeds = [DEVICE_SEED, device.owner.as_ref(), device.device_id.as_bytes()], bump = device.bump)]
+    pub device: Account<'info, Device>,
+    #[account(mut, constraint = recipient_fusion.owner == device.owner @ SnowboardDepinError::InvalidRecipient)]
+    pub recipient_fusion: Account<'info, TokenAccount>,
+    /// CHECK: Ed25519 introspection sysvar.
+    #[account(address = IX_SYSVAR_ID)]
+    pub instructions_sysvar: AccountInfo<'info>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct BatchSubmitTelemetry<'info> {
+    #[account(mut, seeds = [CONFIG_SEED], bump = global_config.bump, has_one = treasury_vault)]
+    pub global_config: Account<'info, GlobalConfig>,
+    #[account(mut)]
+    pub fusion_mint: Account<'info, Mint>,
+    #[account(mut, seeds = [TREASURY_SEED, global_config.key().as_ref()], bump = global_config.treasury_bump)]
+    pub treasury_vault: Account<'info, TokenAccount>,
+    #[account(mut, seeds = [DEVICE_SEED, device.owner.as_ref(), device.device_id.as_bytes()], bump = device.bump)]
+    pub device: Account<'info, Device>,
+    #[account(mut, constraint = recipient_fusion.owner == device.owner @ SnowboardDepinError::InvalidRecipient)]
+    pub recipient_fusion: Account<'info, TokenAccount>,
+    #[account(mut, signer)]
+    pub payer: Signer<'info>,
+    pub token_program: Program<'info, Token>,
 }

@@ -66,6 +66,14 @@ pub enum SnowboardDepinError {
     ProofOfMotionFailed,
     #[msg("Badge already exists or cannot be awarded")]
     BadgeAwardFailed,
+    #[msg("Device is blacklisted for repeated anomalies")]
+    DeviceBlacklisted,
+    #[msg("Sensor slashing executed")]
+    SensorSlashed,
+    #[msg("Sponsor claim failed or not eligible")]
+    SponsorClaimFailed,
+    #[msg("Batch payload too large")]
+    BatchTooLarge,
     #[msg("Halving interval has not elapsed")]
     HalvingNotDue,
     #[msg("Protocol fee amount is zero")]

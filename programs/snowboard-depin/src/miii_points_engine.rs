@@ -22,6 +22,9 @@ pub fn initialize(ctx: Context<Initialize>, reward_per_meter: u64) -> Result<()>
         reward_per_meter
     };
     config.reward_per_trick = DEFAULT_REWARD_PER_TRICK;
+    config.airtime_bps_per_ms = DEFAULT_AIRTIME_BPS_PER_MS;
+    config.rotation_bps_per_rev = DEFAULT_ROTATION_BPS_PER_REV;
+    config.max_trick_multiplier_bps = DEFAULT_MAX_TRICK_MULTIPLIER_BPS;
     config.reward_per_drop_cm = DEFAULT_REWARD_PER_DROP_CM;
     config.reward_per_airtime_ms = DEFAULT_REWARD_PER_AIRTIME_MS;
     config.max_payout_per_report = DEFAULT_MAX_PAYOUT;
@@ -341,19 +344,59 @@ pub fn submit_motion_proof(
     // Stricter checks against device and optional telemetry
     validate_motion_against_telemetry(&proof, &ctx.accounts.device, ctx.accounts.last_telemetry.as_ref().map(|a| &**a))?;
 
-    // Compute reward for trick
+    // Compute base reward for trick and apply confidence scaling
     let mut reward = ctx.accounts.global_config.reward_per_trick;
-    // Small scaling by confidence (percent)
     reward = reward
         .checked_mul(proof.confidence as u64)
         .and_then(|v| v.checked_div(100))
         .ok_or(SnowboardDepinError::MathOverflow)?;
 
+    // Compute dynamic multiplier (bps) based on airtime and rotation
+    let airtime_bonus = (proof.airtime_ms as u64)
+        .checked_mul(ctx.accounts.global_config.airtime_bps_per_ms)
+        .ok_or(SnowboardDepinError::MathOverflow)?;
+    // rotation_deg is in degrees; convert to revolutions (deg/360)
+    let revs_times_bps = (proof.rotation_deg as u64)
+        .checked_mul(ctx.accounts.global_config.rotation_bps_per_rev)
+        .and_then(|v| v.checked_div(360))
+        .ok_or(SnowboardDepinError::MathOverflow)?;
+    let mut multiplier_bps = BPS_DENOM
+        .checked_add(airtime_bonus)
+        .and_then(|v| v.checked_add(revs_times_bps))
+        .ok_or(SnowboardDepinError::MathOverflow)?;
+    if multiplier_bps > ctx.accounts.global_config.max_trick_multiplier_bps {
+        multiplier_bps = ctx.accounts.global_config.max_trick_multiplier_bps;
+    }
+
+    let scaled_reward = reward
+        .checked_mul(multiplier_bps)
+        .and_then(|v| v.checked_div(BPS_DENOM))
+        .ok_or(SnowboardDepinError::MathOverflow)?;
+
+    // Epoch rotation and rate-limit checks
+    let epoch_id = clock.slot / ctx.accounts.global_config.epoch_slots.max(1);
+    rotate_epoch(&mut ctx.accounts.device, epoch_id);
+
+    require!(
+        ctx.accounts
+            .device
+            .epoch_emitted
+            .checked_add(scaled_reward)
+            .ok_or(SnowboardDepinError::MathOverflow)?
+            <= ctx.accounts.global_config.max_epoch_emission,
+        SnowboardDepinError::RateLimitReached
+    );
+    require!(ctx.accounts.treasury_vault.amount >= scaled_reward, SnowboardDepinError::InsufficientTreasury);
+
     // Effects and bookkeeping
     let device = &mut ctx.accounts.device;
     device.last_nonce = proof.nonce;
     device.last_timestamp = proof.timestamp;
-    device.total_rewards = device.total_rewards.checked_add(reward).ok_or(SnowboardDepinError::MathOverflow)?;
+    device.epoch_emitted = device
+        .epoch_emitted
+        .checked_add(scaled_reward)
+        .ok_or(SnowboardDepinError::MathOverflow)?;
+    device.total_rewards = device.total_rewards.checked_add(scaled_reward).ok_or(SnowboardDepinError::MathOverflow)?;
 
     let rec = &mut ctx.accounts.motion_record;
     rec.device = device.key();
@@ -362,7 +405,7 @@ pub fn submit_motion_proof(
     rec.trick_id = proof.trick_id;
     rec.airtime_ms = proof.airtime_ms;
     rec.rotation_deg = proof.rotation_deg;
-    rec.reward_amount = reward;
+    rec.reward_amount = scaled_reward;
     rec.bump = ctx.bumps.motion_record;
 
     // Update badge (init_if_needed semantics assumed)
@@ -378,11 +421,11 @@ pub fn submit_motion_proof(
         .accounts
         .global_config
         .total_rewards_distributed
-        .checked_add(reward)
+        .checked_add(scaled_reward)
         .ok_or(SnowboardDepinError::MathOverflow)?;
 
     // Transfer reward from treasury
-    if reward > 0 {
+    if scaled_reward > 0 {
         let bump = ctx.accounts.global_config.bump;
         let seeds: &[&[u8]] = &[CONFIG_SEED, &[bump]];
         token::transfer(
@@ -395,7 +438,7 @@ pub fn submit_motion_proof(
                 },
                 &[seeds],
             ),
-            reward,
+            scaled_reward,
         )?;
     }
 

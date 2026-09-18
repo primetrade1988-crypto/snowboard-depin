@@ -32,6 +32,11 @@ pub const MAX_TRICK_AIRTIME_MS: u32 = 10_000;
 pub const MAX_TRICK_ROTATION_DEG: u16 = 3600;
 pub const TRICK_COOLDOWN_SECS: i64 = 10;
 
+// Dynamic multiplier defaults (bps; 10_000 == 1.0x)
+pub const DEFAULT_AIRTIME_BPS_PER_MS: u64 = 5; // 0.05% per ms
+pub const DEFAULT_ROTATION_BPS_PER_REV: u64 = 500; // 5% per full revolution
+pub const DEFAULT_MAX_TRICK_MULTIPLIER_BPS: u64 = 50_000; // up to 5x
+
 pub const DEFAULT_EMISSION_PER_SLOT: u64 = 100;
 pub const DEFAULT_HALVING_INTERVAL: u64 = 15_768_000;
 pub const DEFAULT_UNBOND_SLOTS: u64 = 21_600;

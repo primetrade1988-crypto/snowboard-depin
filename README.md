@@ -99,3 +99,16 @@ anchor test
 
 Distributed under the MIT License. See `LICENSE` for more information.
 
+
+
+
+---
+
+## 📊 Tokenomics & Economics
+Full economic model: [tokenomics/README.md](./tokenomics/README.md)
+
+## ⚖️ Legal & Compliance
+- [Terms of Service](./legal/terms-of-service.md)
+- [Privacy Policy](./legal/privacy-policy.md)
+- [DPA Template](./legal/dpa-template.md)
+- [DPO Appointment](./legal/dpo-appointment.md)
